@@ -32,8 +32,13 @@ def execute_grading_gauntlet(submission_id: int, problem_id: int, source_code: s
 
         with open(f"{work_dir}/temp.cpp", "w") as f: f.write(source_code)
 
+# 1. Armored Compilation: Max 256MB RAM, Half CPU, NO Internet
         compile_cmd = [
-            "docker", "run", "--rm", "-v", f"{work_dir}:/usr/src/app", 
+            "docker", "run", "--rm", 
+            "--memory=256m",  
+            "--cpus=0.5",     
+            "--network=none", 
+            "-v", f"{work_dir}:/usr/src/app", 
             "-w", "/usr/src/app", "gcc:latest", "g++", "temp.cpp", "-o", "sol.out"
         ]
         compile_res = subprocess.run(compile_cmd, capture_output=True, text=True)
@@ -46,11 +51,37 @@ def execute_grading_gauntlet(submission_id: int, problem_id: int, source_code: s
         for idx, tc in enumerate(test_cases, start=1):
             with open(f"{work_dir}/temp_in.txt", "w") as f: f.write(tc.input_data)
             
+            # 2. Armored Execution: Max 128MB RAM, Prevent Fork Bombs (--pids-limit)
             run_cmd = [
-                "docker", "run", "--rm", "-v", f"{work_dir}:/usr/src/app", 
+                "docker", "run", "--rm", 
+                "--memory=128m",   
+                "--cpus=0.5",      
+                "--pids-limit=64", 
+                "--network=none",  
+                "-v", f"{work_dir}:/usr/src/app", 
                 "-w", "/usr/src/app", "gcc:latest", "sh", "-c", "./sol.out < temp_in.txt"
             ]
             run_res = subprocess.run(run_cmd, capture_output=True, text=True, timeout=10.0)
+            print(f"--- SECURITY LOG: Docker exited with code {run_res.returncode} ---")
+        # compile_cmd = [
+        #     "docker", "run", "--rm", "-v", f"{work_dir}:/usr/src/app", 
+        #     "-w", "/usr/src/app", "gcc:latest", "g++", "temp.cpp", "-o", "sol.out"
+        # ]
+        # compile_res = subprocess.run(compile_cmd, capture_output=True, text=True)
+        
+        # if compile_res.returncode != 0:
+        #     submission.verdict = "Compilation Error (CE)"
+        #     db.commit()
+        #     return
+
+        # for idx, tc in enumerate(test_cases, start=1):
+        #     with open(f"{work_dir}/temp_in.txt", "w") as f: f.write(tc.input_data)
+            
+        #     run_cmd = [
+        #         "docker", "run", "--rm", "-v", f"{work_dir}:/usr/src/app", 
+        #         "-w", "/usr/src/app", "gcc:latest", "sh", "-c", "./sol.out < temp_in.txt"
+        #     ]
+        #     run_res = subprocess.run(run_cmd, capture_output=True, text=True, timeout=10.0)
             
             if run_res.returncode != 0:
                 submission.verdict = f"Runtime Error (RE) on Test {idx}"

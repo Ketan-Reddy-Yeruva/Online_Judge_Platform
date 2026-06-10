@@ -4,7 +4,16 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 DATABASE_URL = "postgresql://judge_admin:password123@localhost/judge_db"
-engine = create_engine(DATABASE_URL)
+# Create a connection pool to handle massive concurrent traffic spikes
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=20,          # Keep 20 connections permanently open and ready
+    max_overflow=10,       # If all 20 are busy, allow 10 temporary extra connections
+    pool_timeout=30,       # If it's completely jammed, wait 30 seconds before throwing an error
+    pool_recycle=1800,      # Refresh connections every 30 minutes so they don't go stale
+    echo_pool="debug",
+    echo=False
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine) # <-- Python is looking for this exact line!
 Base = declarative_base()
 
