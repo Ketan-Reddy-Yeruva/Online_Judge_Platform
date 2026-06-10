@@ -1,37 +1,13 @@
-import os
-import datetime
-import subprocess
 from fastapi import FastAPI, Depends, HTTPException
-from fastapi.middleware.cors import CORSMiddleware  # <-- THIS WAS THE MISSING PIECE!
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import Session
 
-# 1. DATABASE CONFIGURATION
-DATABASE_URL = "postgresql://judge_admin:password123@localhost/judge_db"
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+# Import our database tools from our new database.py file!
+from database import SessionLocal, DBProblem, DBSubmission, DBTestCase
 
-# 2. DATABASE MODELS
-class DBProblem(Base):
-    __tablename__ = "problems"
-    id = Column(Integer, primary_key=True, index=True)
-    title = Column(String, index=True)
-    description = Column(Text)
-    time_limit = Column(Integer, default=2)
-
-class DBSubmission(Base):
-    __tablename__ = "submissions"
-    id = Column(Integer, primary_key=True, index=True)
-    problem_id = Column(Integer)
-    code = Column(Text)
-    verdict = Column(String, default="Pending")
-    submitted_at = Column(DateTime, default=datetime.datetime.utcnow)
-
-# Automatically generate tables inside PostgreSQL
-Base.metadata.create_all(bind=engine)
+# Import our background processing task from worker.py
+from worker import execute_grading_gauntlet
 
 # Database session dependency
 def get_db():
@@ -41,10 +17,9 @@ def get_db():
     finally:
         db.close()
 
-# 3. FASTAPI APP & CORS SETUP
+# FASTAPI APP & CORS SETUP
 app = FastAPI(title="Online Judge Platform Backend")
 
-# Allow the React frontend to talk to this backend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -53,7 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 4. SCHEMAS
+# SCHEMAS
 class ProblemCreate(BaseModel):
     title: str
     description: str
@@ -62,10 +37,13 @@ class ProblemCreate(BaseModel):
 class SubmissionRequest(BaseModel):
     problem_id: int
     source_code: str
+    
+class TestCaseCreate(BaseModel):
+    problem_id: int
     input_data: str
     expected_output: str
 
-# 5. API ENDPOINTS
+# API ENDPOINTS
 @app.post("/problems")
 def create_problem(prob: ProblemCreate, db: Session = Depends(get_db)):
     new_prob = DBProblem(title=prob.title, description=prob.description, time_limit=prob.time_limit)
@@ -74,51 +52,49 @@ def create_problem(prob: ProblemCreate, db: Session = Depends(get_db)):
     db.refresh(new_prob)
     return {"message": "Problem created!", "id": new_prob.id}
 
+@app.post("/testcases")
+def create_test_case(tc: TestCaseCreate, db: Session = Depends(get_db)):
+    new_tc = DBTestCase(
+        problem_id=tc.problem_id, 
+        input_data=tc.input_data, 
+        expected_output=tc.expected_output
+    )
+    db.add(new_tc)
+    db.commit()
+    return {"message": "Test case added securely!"}
+
 @app.get("/problems")
 def list_problems(db: Session = Depends(get_db)):
     return db.query(DBProblem).all()
 
+@app.get("/problems/{problem_id}")
+def get_single_problem(problem_id: int, db: Session = Depends(get_db)):
+    problem = db.query(DBProblem).filter(DBProblem.id == problem_id).first()
+    if not problem:
+        raise HTTPException(status_code=404, detail="Problem not found")
+    return problem
+
 @app.post("/submit")
 async def evaluate_code(req: SubmissionRequest, db: Session = Depends(get_db)):
-    # Record submission to PostgreSQL
-    new_sub = DBSubmission(problem_id=req.problem_id, code=req.source_code, verdict="Judging")
+    # 1. Instantly record submission to PostgreSQL as "Pending"
+    new_sub = DBSubmission(problem_id=req.problem_id, code=req.source_code, verdict="Pending")
     db.add(new_sub)
     db.commit()
     db.refresh(new_sub)
 
-    # Write files to run compilation
-    with open("temp.cpp", "w") as f: f.write(req.source_code)
-    with open("temp_in.txt", "w") as f: f.write(req.input_data)
+    # 2. Fire-and-forget: Push the job metadata to Redis queue for Celery workers
+    execute_grading_gauntlet.delay(new_sub.id, req.problem_id, req.source_code)
 
-    # Compile
-    compile_res = subprocess.run(["g++", "temp.cpp", "-o", "sol.out"], capture_output=True, text=True)
-    if compile_res.returncode != 0:
-        new_sub.verdict = "Compilation Error (CE)"
-        db.commit()
-        return {"verdict": new_sub.verdict, "error": compile_res.stderr}
+    # 3. Instantly respond to the user browser
+    return {
+        "message": "Submission queued successfully!", 
+        "submission_id": new_sub.id, 
+        "verdict": "Pending"
+    }
 
-    # Run execution
-    try:
-        with open("temp_in.txt", "r") as infile:
-            # Note: I fixed the timeout bug here by hardcoding it to 2.0 seconds
-            run_res = subprocess.run(["./sol.out"], stdin=infile, capture_output=True, text=True, timeout=2.0)
-            
-            if run_res.returncode != 0:
-                new_sub.verdict = "Runtime Error (RE)"
-            elif run_res.stdout.strip() == req.expected_output.strip():
-                new_sub.verdict = "Accepted (AC) ✅"
-            else:
-                new_sub.verdict = "Wrong Answer (WA) ❌"
-                
-            db.commit()
-            return {"verdict": new_sub.verdict}
-            
-    except subprocess.TimeoutExpired:
-        new_sub.verdict = "Time Limit Exceeded (TLE) ⏰"
-        db.commit()
-        return {"verdict": new_sub.verdict}
-        
-    finally:
-        # File Cleanup
-        for f in ["temp.cpp", "temp_in.txt", "sol.out"]:
-            if os.path.exists(f): os.remove(f)
+@app.get("/submission/status/{submission_id}")
+def get_submission_status(submission_id: int, db: Session = Depends(get_db)):
+    submission = db.query(DBSubmission).filter(DBSubmission.id == submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    return {"verdict": submission.verdict}

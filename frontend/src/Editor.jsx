@@ -32,25 +32,64 @@ function Editor() {
     setCode(value);
   };
 
-  const submitCode = async () => {
+  // const submitCode = async () => {
+  //   setIsLoading(true);
+  //   setVerdict('Judging... ⏳');
+    
+  //   try {
+  //     const response = await axios.post('http://127.0.0.1:8000/submit', {
+  //       problem_id: id,
+  //       source_code: code
+  //     });
+      
+  //     setVerdict(response.data.verdict);
+  //   } catch (error) {
+  //     console.error(error);
+  //     setVerdict('Error: Could not connect to the server ❌');
+  //   }
+    
+  //   setIsLoading(false);
+  // };
+
+const submitCode = async () => {
     setIsLoading(true);
-    setVerdict('Judging... ⏳');
+    setVerdict('Queued... 📥');
     
     try {
+      // 1. Send code to server. It returns immediately with a tracking ID
       const response = await axios.post('http://127.0.0.1:8000/submit', {
         problem_id: id,
-        source_code: code,
-        input_data: "10 15", // In a future update, we will pull this from the DB too!
-        expected_output: "25"
+        source_code: code
       });
       
-      setVerdict(response.data.verdict);
+      const submissionId = response.data.submission_id;
+      setVerdict('Judging... ⏳');
+
+      // 2. Start a polling loop that checks the status endpoint every 1 second
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await axios.get(`http://127.0.0.1:8000/submission/status/${submissionId}`);
+          const currentVerdict = statusRes.data.verdict;
+
+          // If the status is no longer "Pending" or "Judging", it means it's done!
+          if (currentVerdict !== 'Pending' && currentVerdict !== 'Judging') {
+            setVerdict(currentVerdict);
+            setIsLoading(false);
+            clearInterval(pollInterval); // Kill the loop!
+          }
+        } catch (err) {
+          console.error("Error polling status:", err);
+          setVerdict("Error checking submission status ❌");
+          setIsLoading(false);
+          clearInterval(pollInterval);
+        }
+      }, 1000); // Check every 1000ms
+
     } catch (error) {
       console.error(error);
       setVerdict('Error: Could not connect to the server ❌');
+      setIsLoading(false);
     }
-    
-    setIsLoading(false);
   };
 
   // 3. Show a loading screen while we wait for the database
