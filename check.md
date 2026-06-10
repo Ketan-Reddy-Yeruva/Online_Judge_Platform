@@ -1,3 +1,5 @@
+
+```markdown
 # 🚀 Distributed Online Judge Platform
 
 A high-performance, full-stack Remote Code Execution (RCE) engine built to securely compile and evaluate untrusted user code against hidden algorithmic test cases. 
@@ -133,8 +135,8 @@ int main() {
 ### 3. Database Connection Pooling
 
 To verify the SQLAlchemy pool is actively circulating connections instead of opening/closing them sequentially, initialize the engine with `echo_pool="debug"`. The backend logs will confirm:
-`DEBUG sqlalchemy.pool.impl.QueuePool Connection <...> being returned to pool`
+<!-- `DEBUG sqlalchemy.pool.impl.QueuePool Connection <...> being returned to pool` -->
 
 ```
-
+`DEBUG sqlalchemy.pool.impl.QueuePool Connection <...> being returned to pool`
 ```
