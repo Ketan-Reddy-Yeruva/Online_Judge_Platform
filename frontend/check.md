@@ -1,5 +1,3 @@
-
-```markdown
 # 🚀 Distributed Online Judge Platform
 
 A high-performance, full-stack Remote Code Execution (RCE) engine built to securely compile and evaluate untrusted user code against hidden algorithmic test cases. 
